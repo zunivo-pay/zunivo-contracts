@@ -123,7 +123,7 @@ contract ZunivoNames is ERC721 {
     function _isReserved(string calldata label) internal pure returns (bool) {
         bytes32 h = keccak256(bytes(label));
         return
-            h == keccak256("zunivo") || h == keccak256("admin") || h == keccak256("root") ||
+            h == keccak256("zunivo") || h == keccak256("agent") || h == keccak256("ai") || h == keccak256("x402") || h == keccak256("admin") || h == keccak256("root") ||
             h == keccak256("support") || h == keccak256("help") || h == keccak256("pay") ||
             h == keccak256("app") || h == keccak256("api") || h == keccak256("circle") ||
             h == keccak256("usdc") || h == keccak256("arc") || h == keccak256("official") ||
@@ -164,8 +164,8 @@ contract ZunivoNames is ERC721 {
         _requireOwned(tokenId);
         string memory label = nameOf[tokenId];
         string memory json = string.concat(
-            '{"name":"', label, '.zunivo",',
-            '"description":"Zunivo payment handle on Arc. Whoever holds this token receives payments sent to ', label, '.zunivo in the Zunivo network.",',
+            '{"name":"', label, '.agent",',
+            '"description":"Zunivo payment handle on Arc. Whoever holds this token receives payments sent to ', label, '.agent in the Zunivo network.",',
             '"image":"data:image/svg+xml;base64,', Base64.encode(bytes(_cardSvg(label))), '",',
             '"attributes":[{"trait_type":"Length","value":"', Strings.toString(bytes(label).length), '"},',
             '{"trait_type":"Network","value":"Arc"}]}'
@@ -184,7 +184,7 @@ contract ZunivoNames is ERC721 {
             '<circle cx="74" cy="157" r="7" fill="#0B8F63"/>',
             '<rect x="60" y="166" width="100" height="19" rx="9.5" fill="#3D5AFE"/>',
             '<text x="60" y="308" font-family="Helvetica,Arial,sans-serif" font-weight="700" font-size="', fs, '" fill="#FFFFFF">', label, '</text>',
-            '<text x="60" y="352" font-family="Helvetica,Arial,sans-serif" font-weight="600" font-size="27" fill="#10C48B">.zunivo</text>',
+            '<text x="60" y="352" font-family="Helvetica,Arial,sans-serif" font-weight="600" font-size="27" fill="#10C48B">.agent</text>',
             '<rect x="60" y="398" width="120" height="5" rx="2.5" fill="#3D5AFE"/>',
             '<text x="60" y="438" font-family="Courier,monospace" font-size="15" letter-spacing="3" fill="#98A2B3">ZUNIVO NAMES</text>',
             '<text x="60" y="462" font-family="Courier,monospace" font-size="13" letter-spacing="3" fill="#5B6474">ON ARC</text>',
