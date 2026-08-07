@@ -1,52 +1,50 @@
-# paylink-core (internal codename)
+# zunivo contracts
 
-Non-custodial USDC payment router for Circle's Arc — contract layer of the
-payment-link product. Brand name TBD; nothing in this repo depends on it.
+The five verified, zero-custody contracts behind [zunivo](https://zunivo.io) —
+non-custodial USDC rails on Circle's Arc.
+
+| contract | address (Arc Testnet) | role |
+| --- | --- | --- |
+| `ArcPayRouter` | [`0x4210…Ea55`](https://testnet.arcscan.app/address/0x4210D40a9899e42b4946B9dC7E0C35d3cf14Ea55) | atomic order-bound settlement, payer→payee in one tx, fee hard-capped at 1% on-chain |
+| `ZunivoNames` | [`0x244e…8cc5`](https://testnet.arcscan.app/address/0x244e0c8bE1Ed59636901F98920413d414B158cc5) | `.agent` payment names — ERC-721, art & metadata 100% on-chain, payments follow the holder |
+| `ZunivoScheduledSends` | [`0xad51…47c02`](https://testnet.arcscan.app/address/0xad5121668867a234Bd1f7D62eC40D09Ee3f47c02) | keyless committed sends: irrevocable payroll/budgets, permissionless release |
+| `ZunivoSplit` | [`0x12F2…53eCF`](https://testnet.arcscan.app/address/0x12F21A2AC582061598445874c6C5f4F3bcE53eCF) | immutable revenue-share tables (2–20 payees), one payment splits atomically |
+| `ZunivoAgentRecords` | [`0x4f40…306B`](https://testnet.arcscan.app/address/0x4f405f0aA04FD6FaE0838DeE6FD184B1f3cC306B) | service discovery for `.agent` names — endpoint / x402 / description text records, writes gated by name ownership |
+
+All five are **verified on ArcScan** and covered by a **78-test adversarial
+Foundry suite** (fuzzing, reentrancy probes, owner-powerlessness proofs).
 
 ## Layout
-- `src/ArcPayRouter.sol`   — router contract (zero custody, orderId events, fee switch capped at 1%)
-- `test/ArcPayRouter.t.sol` — Foundry suite: 17 tests incl. fuzz + reentrancy probe (all passing)
-- `script/Deploy.s.sol`     — Arc testnet deployment script
+
+- `src/` — the five contracts above
+- `test/` — 78 tests across five suites (`forge test -vv`)
+- `script/` — deployment scripts (`Deploy`, `DeployNames`, `DeployRecords`, …)
 
 ## Arc Testnet parameters
+
 - Chain ID: `5042002`
 - RPC: `https://rpc.testnet.arc.network`
 - Explorer: `https://testnet.arcscan.app`
 - Gas token: native USDC (faucet: https://faucet.circle.com — select Arc Testnet)
 
 ## Run tests
+
 ```bash
 forge install foundry-rs/forge-std   # if lib/ is empty
-forge test -vv
+forge test -vv                        # 78/78
 ```
 
-## Deploy (secrets via 1Password, never in files)
+## Deploy
+
+Secrets are entered at the prompt or via env — never committed to files.
+
 ```bash
-export DEPLOYER_PK=$(op read "op://<vault>/arc-deployer/private key")
-export FEE_COLLECTOR=0x<your_fee_wallet>
+read -s "DEPLOYER_PK?deployer key: " && export DEPLOYER_PK="0x${DEPLOYER_PK#0x}"
 forge script script/Deploy.s.sol:Deploy --rpc-url arc_testnet --broadcast
 ```
 
-## ZunivoNames (src/ZunivoNames.sol)
-On-chain ERC-721 handle registry: tokenId = keccak256(label), mint fee in
-native USDC forwarded to treasury in-tx (zero custody), resolution follows
-the NFT on transfer. 16 tests; Slither: 0 high/medium.
-Deploy: script/DeployNames.s.sol (env: DEPLOYER_PK, NAMES_TREASURY, NAMES_MINT_PRICE).
-Requires: git clone --depth 1 https://github.com/OpenZeppelin/openzeppelin-contracts lib/openzeppelin-contracts
+## Ecosystem
 
-## ZunivoScheduledSends (src/ZunivoScheduledSends.sol)
-Committed scheduled payments (trust layer): sender locks native USDC with an
-unlock time; irrevocable before unlock (no pause/upgrade/owner path — proven
-by tests); release() permissionless after unlock but pays only the fixed
-recipient; optional reclaim window (>=30d after unlock) chosen irrevocably at
-creation; fee bps snapshotted per lock; treasury immutable. Batch payroll up
-to 100. 17 tests; Slither: timestamp-comparison notes only (inherent to
-timelocks). Deploy: script/DeployScheduled.s.sol (DEPLOYER_PK, SCHED_TREASURY,
-SCHED_FEE_BPS).
-
-## ZunivoSplit (src/ZunivoSplit.sol)
-Atomic revenue splitting: immutable payee/bps tables (2-20 payees, sum 10000),
-any payment distributed within the same tx (zero custody, rounding dust to
-last payee), per-payee ShareSent events for receipts, fee <=1% to immutable
-treasury. 11 tests incl. reentrancy + conservation fuzz.
-Deploy: script/DeploySplit.s.sol (DEPLOYER_PK, SPLIT_TREASURY, SPLIT_FEE_BPS).
+- App: [app.zunivo.io](https://app.zunivo.io) · Docs: [docs.zunivo.io](https://docs.zunivo.io)
+- Agent SDK: [`zunivo-x402-arc`](https://www.npmjs.com/package/zunivo-x402-arc) (x402 payments on Arc)
+- MCP server: [`zunivo-mcp`](https://www.npmjs.com/package/zunivo-mcp) (agents pay from Claude/ChatGPT/Cursor)
