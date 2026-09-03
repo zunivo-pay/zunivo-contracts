@@ -4,23 +4,23 @@ pragma solidity ^0.8.24;
 import {Test} from "forge-std/Test.sol";
 import {ZunivoSplit} from "../src/ZunivoSplit.sol";
 
+/// Re-enters withdraw() on receipt — must not double-pay (owed zeroed first).
 contract ReentrantPayee {
     ZunivoSplit internal s;
-    uint256 internal splitId;
     bool internal armed;
-
     constructor(ZunivoSplit _s) { s = _s; }
-    function arm(uint256 _id) external { splitId = _id; armed = true; }
-
+    function arm() external { armed = true; }
+    function pull() external { s.withdraw(address(this)); }
     receive() external payable {
         if (armed) {
             armed = false;
-            // attempt to re-enter with zero value — must revert, and must not
-            // corrupt the outer distribution
-            try s.pay{value: 0}(splitId, bytes32(0)) { revert("reentry ok?!"); } catch {}
+            try s.withdraw(address(this)) { revert("reentry paid twice?!"); } catch {}
         }
     }
 }
+
+/// Rejects all native transfers (no payable receive) — a "bad" payee.
+contract Rejector {}
 
 contract ZunivoSplitTest is Test {
     ZunivoSplit internal s;
@@ -78,27 +78,33 @@ contract ZunivoSplitTest is Test {
         s.createSplit(p, b);
     }
 
-    // ------------------------------------------------------------ payment
+    // ------------------------------------------------------------ payment (pull)
 
     function test_pay_threeWay_exact() public {
         uint256 id = _threeWay();
         vm.prank(payer);
         s.pay{value: 100 ether}(id, keccak256("ORDER-1"));
 
+        // shares are credited, not pushed
+        assertEq(s.owed(platform), 70 ether);
+        assertEq(s.owed(creator), 25 ether);
+        assertEq(s.owed(referrer), 5 ether);
+        assertEq(address(s).balance, 100 ether); // held until pulled
+
+        s.withdraw(platform); s.withdraw(creator); s.withdraw(referrer);
         assertEq(platform.balance, 70 ether);
         assertEq(creator.balance, 25 ether);
         assertEq(referrer.balance, 5 ether);
-        assertEq(address(s).balance, 0); // zero custody
+        assertEq(address(s).balance, 0); // fully drained
     }
 
     function test_pay_roundingDust_toLastPayee() public {
         uint256 id = _threeWay();
         vm.prank(payer);
         s.pay{value: 1}(id, 0); // 1 wei: 0/0/dust
-        assertEq(platform.balance, 0);
-        assertEq(creator.balance, 0);
-        assertEq(referrer.balance, 1); // last payee absorbs everything
-        assertEq(address(s).balance, 0);
+        assertEq(s.owed(platform), 0);
+        assertEq(s.owed(creator), 0);
+        assertEq(s.owed(referrer), 1); // last payee absorbs everything
     }
 
     function test_pay_withFee() public {
@@ -107,11 +113,24 @@ contract ZunivoSplitTest is Test {
         uint256 id = _threeWay();
         vm.prank(payer);
         s.pay{value: 100 ether}(id, 0);
+        assertEq(s.owed(treasury), 1 ether);
+        assertEq(s.owed(platform), 69.3 ether);
+        assertEq(s.owed(creator), 24.75 ether);
+        assertEq(s.owed(referrer), 4.95 ether);
+        s.withdraw(treasury);
         assertEq(treasury.balance, 1 ether);
-        assertEq(platform.balance, 69.3 ether);   // 70% of 99
-        assertEq(creator.balance, 24.75 ether);   // 25% of 99
-        assertEq(referrer.balance, 4.95 ether);   // dust-free here
-        assertEq(address(s).balance, 0);
+    }
+
+    /// Accumulate across multiple payments before withdrawing.
+    function test_pay_accumulatesAcrossPayments() public {
+        uint256 id = _threeWay();
+        vm.startPrank(payer);
+        s.pay{value: 10 ether}(id, 0);
+        s.pay{value: 10 ether}(id, 0);
+        vm.stopPrank();
+        assertEq(s.owed(platform), 14 ether); // 7 + 7
+        s.withdraw(platform);
+        assertEq(platform.balance, 14 ether);
     }
 
     function test_pay_guards() public {
@@ -130,23 +149,54 @@ contract ZunivoSplitTest is Test {
         vm.deal(anyone, 10 ether);
         vm.prank(anyone);
         s.pay{value: 10 ether}(id, 0);
+        s.withdraw(platform);
         assertEq(platform.balance, 7 ether);
     }
 
-    function test_reentrantPayee_cannotCorruptDistribution() public {
+    function test_withdraw_nothingOwed_reverts() public {
+        vm.expectRevert(ZunivoSplit.NothingOwed.selector);
+        s.withdraw(platform);
+    }
+
+    // ------------------------------------------------------------ M-1 fix
+
+    /// A payee that rejects funds no longer bricks the split: pay() succeeds,
+    /// the good payee can pull, and only the bad payee's own pull fails.
+    function test_M1_badPayee_doesNotBrickSplit() public {
+        Rejector bad = new Rejector();
+        address[] memory p = new address[](2);
+        uint16[] memory b = new uint16[](2);
+        p[0] = address(bad); p[1] = creator;
+        b[0] = 5000; b[1] = 5000;
+        uint256 id = s.createSplit(p, b);
+
+        vm.prank(payer);
+        s.pay{value: 10 ether}(id, 0); // does NOT revert anymore
+
+        // good payee pulls fine
+        s.withdraw(creator);
+        assertEq(creator.balance, 5 ether);
+
+        // bad payee's share is safely held; its own withdraw reverts (its problem)
+        assertEq(s.owed(address(bad)), 5 ether);
+        vm.expectRevert(ZunivoSplit.TransferFailed.selector);
+        s.withdraw(address(bad));
+    }
+
+    function test_withdraw_reentrancy_cannotDoublePay() public {
         ReentrantPayee attacker = new ReentrantPayee(s);
         address[] memory p = new address[](2);
         uint16[] memory b = new uint16[](2);
         p[0] = address(attacker); p[1] = creator;
         b[0] = 5000; b[1] = 5000;
         uint256 id = s.createSplit(p, b);
-        attacker.arm(id);
 
         vm.prank(payer);
         s.pay{value: 10 ether}(id, 0);
-        assertEq(address(attacker).balance, 5 ether);
-        assertEq(creator.balance, 5 ether);
-        assertEq(address(s).balance, 0);
+        attacker.arm();
+        attacker.pull();
+        assertEq(address(attacker).balance, 5 ether); // paid exactly once
+        assertEq(s.owed(address(attacker)), 0);
     }
 
     function test_receive_reverts() public {
@@ -155,7 +205,7 @@ contract ZunivoSplitTest is Test {
         assertFalse(ok);
     }
 
-    // ------------------------------------------------------------ admin
+    // ------------------------------------------------------------ admin + ownership
 
     function test_admin_guards() public {
         vm.prank(payer);
@@ -165,6 +215,24 @@ contract ZunivoSplitTest is Test {
         vm.prank(owner);
         vm.expectRevert(ZunivoSplit.FeeTooHigh.selector);
         s.setFeeBps(101);
+    }
+
+    function test_ownership_twoStep() public {
+        address next = makeAddr("next");
+        vm.prank(owner);
+        s.transferOwnership(next);
+        assertEq(s.owner(), owner);        // not yet
+        assertEq(s.pendingOwner(), next);
+
+        vm.prank(next);
+        s.acceptOwnership();
+        assertEq(s.owner(), next);
+        assertEq(s.pendingOwner(), address(0));
+
+        // stale pending cannot accept
+        vm.prank(owner);
+        vm.expectRevert(ZunivoSplit.NotPendingOwner.selector);
+        s.acceptOwnership();
     }
 
     // ------------------------------------------------------------ fuzz
@@ -186,8 +254,8 @@ contract ZunivoSplitTest is Test {
         vm.prank(payer);
         s.pay{value: amount}(id, 0);
 
-        // every wei accounted for, nothing stranded
-        assertEq(platform.balance + creator.balance + treasury.balance, amount);
-        assertEq(address(s).balance, 0);
+        // every wei accounted for across the pull ledger, nothing stranded
+        assertEq(s.owed(platform) + s.owed(creator) + s.owed(treasury), amount);
+        assertEq(address(s).balance, amount); // all held pending withdrawal
     }
 }

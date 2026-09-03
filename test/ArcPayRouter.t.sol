@@ -31,6 +31,8 @@ contract ReentrantMerchant {
     }
 }
 
+contract Rejector {}
+
 contract ArcPayRouterTest is Test {
     ArcPayRouter internal router;
 
@@ -198,16 +200,46 @@ contract ArcPayRouterTest is Test {
         router.setFeeCollector(address(0));
     }
 
-    function test_transferOwnership_flow() public {
+    function test_transferOwnership_twoStep() public {
         address newOwner = makeAddr("newOwner");
         vm.prank(owner);
         router.transferOwnership(newOwner);
+        assertEq(router.owner(), owner);          // not yet — pending only
+        assertEq(router.pendingOwner(), newOwner);
+
+        vm.prank(newOwner);
+        router.acceptOwnership();
         assertEq(router.owner(), newOwner);
+        assertEq(router.pendingOwner(), address(0));
 
         // Old owner loses rights
         vm.prank(owner);
         vm.expectRevert(ArcPayRouter.NotOwner.selector);
         router.setFeeBps(10);
+
+        // random address cannot accept a non-existent pending transfer
+        vm.prank(owner);
+        vm.expectRevert(ArcPayRouter.NotPendingOwner.selector);
+        router.acceptOwnership();
+    }
+
+    /// L-1: a reverting fee collector no longer DoSes payments — fee accrues.
+    function test_L1_badFeeCollector_doesNotBlockPayment() public {
+        Rejector bad = new Rejector();
+        vm.startPrank(owner);
+        router.setFeeBps(100);            // 1%
+        router.setFeeCollector(address(bad));
+        vm.stopPrank();
+
+        address merchant = makeAddr("merchant");
+        vm.deal(address(this), 100 ether);
+        router.pay{value: 100 ether}(bytes32("o"), merchant); // must NOT revert
+        assertEq(merchant.balance, 99 ether);                 // merchant paid in full
+        assertEq(router.owedFees(address(bad)), 1 ether);     // fee safely accrued
+
+        // the bad collector's own pull reverts (its problem, not the payer's)
+        vm.expectRevert(ArcPayRouter.NativeTransferFailed.selector);
+        router.withdrawFees(address(bad));
     }
 
     // ---------------------------------------------------------------

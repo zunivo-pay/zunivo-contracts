@@ -177,13 +177,48 @@ contract ZunivoNamesTest is Test {
         assertEq(names.treasury(), t2);
     }
 
-    function test_transferOwnership_flow() public {
+    function test_transferOwnership_twoStep() public {
         address next = makeAddr("nextOwner");
         vm.prank(owner);
         names.transferOwnership(next);
+        // not yet effective — old owner still in charge
+        assertEq(names.owner(), owner);
+        assertEq(names.pendingOwner(), next);
+        vm.prank(owner);
+        names.setMintPrice(1); // still works
+
+        vm.prank(next);
+        names.acceptOwnership();
+        assertEq(names.owner(), next);
+        assertEq(names.pendingOwner(), address(0));
+
         vm.prank(owner);
         vm.expectRevert(ZunivoNames.NotOwner.selector);
-        names.setMintPrice(1);
+        names.setMintPrice(2);
+    }
+
+    function test_mintReserved_ownerClaimsBrand() public {
+        // "zunivo" is reserved → public mint blocked (pay PRICE to reach the reserved check)
+        vm.deal(alice, 10 ether);
+        vm.prank(alice);
+        vm.expectRevert(ZunivoNames.ReservedName.selector);
+        names.mint{value: PRICE}("zunivo");
+
+        // owner can claim it via mintReserved
+        vm.prank(owner);
+        uint256 id = names.mintReserved("zunivo", owner);
+        assertEq(names.ownerOf(id), owner);
+        assertEq(names.resolve("zunivo"), owner);
+
+        // non-owner cannot
+        vm.prank(alice);
+        vm.expectRevert(ZunivoNames.NotOwner.selector);
+        names.mintReserved("official", alice);
+
+        // cannot double-register
+        vm.prank(owner);
+        vm.expectRevert(ZunivoNames.AlreadyRegistered.selector);
+        names.mintReserved("zunivo", owner);
     }
 
     function test_receive_reverts() public {

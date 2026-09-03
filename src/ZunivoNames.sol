@@ -15,6 +15,8 @@ import {Strings} from "@openzeppelin/contracts/utils/Strings.sol";
 ///         mint transaction — the contract never holds a balance.
 contract ZunivoNames is ERC721 {
     address public owner;
+    /// @notice Two-step ownership handoff (L-3).
+    address public pendingOwner;
     address public treasury;
 
     /// @notice Mint price in native-USDC wei (18 decimals). Adjustable, capped.
@@ -24,13 +26,23 @@ contract ZunivoNames is ERC721 {
     mapping(uint256 => string) public nameOf;
     mapping(uint256 => address) public recordOf;
 
+    /// @notice Ownership epoch per name (M-2). Incremented on every real transfer
+    ///         (not on mint). ZunivoAgentRecords keys its text records by this
+    ///         epoch, so a name's service records auto-invalidate the instant it
+    ///         changes hands — a bought name can never keep advertising the
+    ///         previous holder's payment endpoint.
+    mapping(uint256 => uint64) public nameEpoch;
+
     event NameRegistered(string name, uint256 indexed tokenId, address indexed holder, uint256 pricePaid);
     event AddressSet(uint256 indexed tokenId, address indexed newAddress);
+    event NameEpochBumped(uint256 indexed tokenId, uint64 newEpoch);
     event MintPriceUpdated(uint256 oldPrice, uint256 newPrice);
     event TreasuryUpdated(address oldTreasury, address newTreasury);
+    event OwnershipTransferStarted(address indexed previousOwner, address indexed newOwner);
     event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
 
     error NotOwner();
+    error NotPendingOwner();
     error NotTokenOwner();
     error ZeroAddress();
     error WrongPayment();
@@ -81,6 +93,20 @@ contract ZunivoNames is ERC721 {
         }
     }
 
+    /// @notice Owner-only registration of a RESERVED name (L-2), so the project
+    ///         can claim its own brand handles (zunivo, official, pay, …) which
+    ///         `mint()` blocks for everyone. Still subject to name-format rules
+    ///         and single-registration; no fee.
+    function mintReserved(string calldata label, address to) external onlyOwner returns (uint256 tokenId) {
+        if (to == address(0)) revert ZeroAddress();
+        if (!_validName(bytes(label))) revert InvalidName();
+        tokenId = uint256(keccak256(bytes(label)));
+        if (_ownerOf(tokenId) != address(0)) revert AlreadyRegistered();
+        nameOf[tokenId] = label;
+        _mint(to, tokenId);
+        emit NameRegistered(label, tokenId, to, 0);
+    }
+
     function resolve(string calldata label) external view returns (address) {
         return recordOf[uint256(keccak256(bytes(label)))];
     }
@@ -95,12 +121,18 @@ contract ZunivoNames is ERC721 {
     }
 
     /// @dev Resolution follows the token: mint and every transfer rebind the
-    ///      record to the new holder.
+    ///      record to the new holder. On a real transfer (from != 0), also bump
+    ///      the ownership epoch so ZunivoAgentRecords invalidates the previous
+    ///      holder's service records (M-2).
     function _update(address to, uint256 tokenId, address auth) internal override returns (address) {
         address from = super._update(to, tokenId, auth);
         if (to != address(0)) {
             recordOf[tokenId] = to;
             emit AddressSet(tokenId, to);
+            if (from != address(0)) {
+                uint64 e = ++nameEpoch[tokenId];
+                emit NameEpochBumped(tokenId, e);
+            }
         }
         return from;
     }
@@ -149,8 +181,15 @@ contract ZunivoNames is ERC721 {
 
     function transferOwnership(address newOwner) external onlyOwner {
         if (newOwner == address(0)) revert ZeroAddress();
-        emit OwnershipTransferred(owner, newOwner);
-        owner = newOwner;
+        pendingOwner = newOwner;
+        emit OwnershipTransferStarted(owner, newOwner);
+    }
+
+    function acceptOwnership() external {
+        if (msg.sender != pendingOwner) revert NotPendingOwner();
+        emit OwnershipTransferred(owner, pendingOwner);
+        owner = pendingOwner;
+        pendingOwner = address(0);
     }
 
     // ---------------------------------------------------------------

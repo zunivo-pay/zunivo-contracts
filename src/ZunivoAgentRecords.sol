@@ -3,6 +3,7 @@ pragma solidity ^0.8.24;
 
 interface IZunivoNames {
     function ownerOf(uint256 tokenId) external view returns (address);
+    function nameEpoch(uint256 tokenId) external view returns (uint64);
 }
 
 /// @title ZunivoAgentRecords
@@ -17,17 +18,20 @@ interface IZunivoNames {
 ///           "description"  human/agent-readable one-liner
 ///           "avatar"       image URL
 ///
-///         Records survive name transfers (the new holder can overwrite or
-///         clearRecords()). Versioned storage makes clearing O(1).
+///         Records auto-invalidate on name transfer (M-2): storage is keyed by
+///         the name's ownership epoch (ZunivoNames.nameEpoch), which the NFT
+///         contract bumps on every transfer. A bought name therefore never keeps
+///         advertising the previous holder's endpoints. An explicit clearRecords
+///         within the current epoch is still O(1) via a local version bump.
 /// @dev    Fully permissionless and non-custodial: no owner, no fees, no
-///         admin functions. The only authority is ZunivoNames.ownerOf.
+///         admin functions. The only authority is ZunivoNames.ownerOf/nameEpoch.
 contract ZunivoAgentRecords {
     IZunivoNames public immutable names;
 
-    /// tokenId => current record version (bumped by clearRecords)
+    /// tokenId => local record version within the current epoch (bumped by clearRecords)
     mapping(uint256 => uint64) public recordVersion;
-    /// tokenId => version => key => value
-    mapping(uint256 => mapping(uint64 => mapping(string => string))) private _texts;
+    /// tokenId => ownershipEpoch => version => key => value
+    mapping(uint256 => mapping(uint64 => mapping(uint64 => mapping(string => string)))) private _texts;
 
     event TextChanged(uint256 indexed tokenId, string indexed indexedKey, string key, string value);
     event RecordsCleared(uint256 indexed tokenId, uint64 newVersion);
@@ -37,12 +41,19 @@ contract ZunivoAgentRecords {
     error KeyTooLong();
     error ValueTooLong();
     error LengthMismatch();
+    error ZeroAddress();
 
     uint256 public constant MAX_KEY_LENGTH = 64;
     uint256 public constant MAX_VALUE_LENGTH = 2048;
 
     constructor(address _names) {
+        if (_names == address(0)) revert ZeroAddress(); // I-2
         names = IZunivoNames(_names);
+    }
+
+    /// @dev The live ownership epoch for a name, read from the NFT contract.
+    function _epoch(uint256 tokenId) internal view returns (uint64) {
+        return names.nameEpoch(tokenId);
     }
 
     // ---------------------------------------------------------------
@@ -75,7 +86,7 @@ contract ZunivoAgentRecords {
         _requireHolder(tokenId);
         if (bytes(key).length == 0 || bytes(key).length > MAX_KEY_LENGTH) revert KeyTooLong();
         if (bytes(value).length > MAX_VALUE_LENGTH) revert ValueTooLong();
-        _texts[tokenId][recordVersion[tokenId]][key] = value;
+        _texts[tokenId][_epoch(tokenId)][recordVersion[tokenId]][key] = value;
         emit TextChanged(tokenId, key, key, value);
     }
 
@@ -95,20 +106,21 @@ contract ZunivoAgentRecords {
 
     function text(string calldata label, string calldata key) external view returns (string memory) {
         uint256 tokenId = uint256(keccak256(bytes(label)));
-        return _texts[tokenId][recordVersion[tokenId]][key];
+        return _texts[tokenId][_epoch(tokenId)][recordVersion[tokenId]][key];
     }
 
     function textById(uint256 tokenId, string calldata key) external view returns (string memory) {
-        return _texts[tokenId][recordVersion[tokenId]][key];
+        return _texts[tokenId][_epoch(tokenId)][recordVersion[tokenId]][key];
     }
 
     /// @notice Batch read — one call to fetch a full agent card.
     function texts(string calldata label, string[] calldata keys) external view returns (string[] memory values) {
         uint256 tokenId = uint256(keccak256(bytes(label)));
+        uint64 e = _epoch(tokenId);
         uint64 v = recordVersion[tokenId];
         values = new string[](keys.length);
         for (uint256 i = 0; i < keys.length; i++) {
-            values[i] = _texts[tokenId][v][keys[i]];
+            values[i] = _texts[tokenId][e][v][keys[i]];
         }
     }
 }

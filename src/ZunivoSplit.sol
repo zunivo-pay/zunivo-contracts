@@ -19,6 +19,8 @@ contract ZunivoSplit {
     }
 
     address public owner;
+    /// @notice Two-step ownership handoff (L-3).
+    address public pendingOwner;
     address public immutable treasury;
     uint16 public feeBps;
 
@@ -29,13 +31,22 @@ contract ZunivoSplit {
     uint256 public nextSplitId;
     mapping(uint256 => SplitConfig) internal _splits;
 
+    /// @notice Pull-payment ledger (M-1 / L-1). Each payment credits every
+    ///         payee's share here; payees pull independently. One payee that
+    ///         reverts on receipt can therefore no longer brick the whole split
+    ///         for everyone else. The contract holds only these unclaimed shares.
+    mapping(address => uint256) public owed;
+
     event SplitCreated(uint256 indexed splitId, address indexed creator, address[] payees, uint16[] sharesBps);
     event SplitPaid(uint256 indexed splitId, bytes32 indexed orderId, address indexed payer, uint256 grossAmount, uint256 feeAmount);
-    event ShareSent(uint256 indexed splitId, bytes32 indexed orderId, address indexed payee, uint256 amount);
+    event ShareCredited(uint256 indexed splitId, bytes32 indexed orderId, address indexed payee, uint256 amount);
+    event Withdrawn(address indexed account, uint256 amount);
     event FeeBpsUpdated(uint16 oldFeeBps, uint16 newFeeBps);
+    event OwnershipTransferStarted(address indexed previousOwner, address indexed newOwner);
     event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
 
     error NotOwner();
+    error NotPendingOwner();
     error ZeroAddress();
     error ZeroValue();
     error BadPayees();
@@ -43,6 +54,7 @@ contract ZunivoSplit {
     error SplitNotFound();
     error FeeTooHigh();
     error TransferFailed();
+    error NothingOwed();
 
     modifier onlyOwner() {
         if (msg.sender != owner) revert NotOwner();
@@ -99,6 +111,11 @@ contract ZunivoSplit {
     // Payment — atomic distribution, zero custody
     // ---------------------------------------------------------------
 
+    /// @dev M-1 fix: shares are CREDITED to a pull ledger inside the loop, not
+    ///      pushed. A single payee that reverts on receipt can no longer make
+    ///      `pay()` revert and brick the split for every other payee. Payees and
+    ///      the treasury pull independently via `withdraw()`. Accounting is
+    ///      identical (last payee still absorbs rounding dust; conservation holds).
     function pay(uint256 splitId, bytes32 orderId) external payable {
         SplitConfig storage c = _splits[splitId];
         if (c.creator == address(0)) revert SplitNotFound();
@@ -116,15 +133,22 @@ contract ZunivoSplit {
                 ? distributable - sent // last payee absorbs rounding dust
                 : (distributable * c.sharesBps[i]) / uint256(TOTAL_BPS);
             sent += share;
-            emit ShareSent(splitId, orderId, c.payees[i], share);
-            (bool ok, ) = c.payees[i].call{value: share}("");
-            if (!ok) revert TransferFailed();
+            owed[c.payees[i]] += share;
+            emit ShareCredited(splitId, orderId, c.payees[i], share);
         }
 
-        if (fee > 0) {
-            (bool okFee, ) = treasury.call{value: fee}("");
-            if (!okFee) revert TransferFailed();
-        }
+        if (fee > 0) owed[treasury] += fee;
+    }
+
+    /// @notice Pull your accrued share(s). Permissionless: funds only go to the
+    ///         credited account, so anyone may trigger a withdraw for it.
+    function withdraw(address account) external {
+        uint256 amt = owed[account];
+        if (amt == 0) revert NothingOwed();
+        owed[account] = 0; // effects before interaction
+        emit Withdrawn(account, amt);
+        (bool ok, ) = account.call{value: amt}("");
+        if (!ok) revert TransferFailed();
     }
 
     // ---------------------------------------------------------------
@@ -139,8 +163,15 @@ contract ZunivoSplit {
 
     function transferOwnership(address newOwner) external onlyOwner {
         if (newOwner == address(0)) revert ZeroAddress();
-        emit OwnershipTransferred(owner, newOwner);
-        owner = newOwner;
+        pendingOwner = newOwner;
+        emit OwnershipTransferStarted(owner, newOwner);
+    }
+
+    function acceptOwnership() external {
+        if (msg.sender != pendingOwner) revert NotPendingOwner();
+        emit OwnershipTransferred(owner, pendingOwner);
+        owner = pendingOwner;
+        pendingOwner = address(0);
     }
 
     receive() external payable {

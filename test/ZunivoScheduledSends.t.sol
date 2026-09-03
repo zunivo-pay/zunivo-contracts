@@ -21,6 +21,8 @@ contract ReentrantRecipient {
     }
 }
 
+contract RejectingRecipient {}
+
 contract ZunivoScheduledSendsTest is Test {
     ZunivoScheduledSends internal s;
 
@@ -255,6 +257,43 @@ contract ZunivoScheduledSendsTest is Test {
         vm.warp(unlock);
         s.release(a);
         assertEq(address(s).balance, 70 ether); // untouched lock stays fully backed
+    }
+
+    // ------------------------------------------------------------ H-1 / I-1 / L-3
+
+    /// H-1: release() to a non-receiving recipient no longer reverts — it settles
+    /// and credits the pull ledger, so committed/wage funds can never freeze.
+    function test_H1_release_toNonReceiving_creditsInsteadOfReverting() public {
+        RejectingRecipient bad = new RejectingRecipient();
+        vm.prank(boss);
+        uint256 id = s.createSend{value: 5 ether}(address(bad), unlock, 0, keccak256("wage"));
+        vm.warp(unlock);
+        s.release(id); // must NOT revert
+        assertEq(s.withdrawable(address(bad)), 5 ether);
+        assertEq(uint8(_status(id)), uint8(ZunivoScheduledSends.Status.Released));
+    }
+
+    /// I-1: reclaimGrace above MAX_LOCK_DURATION is rejected at creation.
+    function test_I1_graceTooLong_reverts() public {
+        vm.prank(boss);
+        vm.expectRevert(ZunivoScheduledSends.GraceTooLong.selector);
+        s.createSend{value: 1 ether}(worker, unlock, uint64(400 days), 0);
+    }
+
+    /// L-3: ownership is two-step.
+    function test_L3_ownership_twoStep() public {
+        address next = makeAddr("next");
+        vm.prank(owner);
+        s.transferOwnership(next);
+        assertEq(s.owner(), owner);
+        assertEq(s.pendingOwner(), next);
+        vm.prank(next);
+        s.acceptOwnership();
+        assertEq(s.owner(), next);
+    }
+
+    function _status(uint256 id) internal view returns (ZunivoScheduledSends.Status st) {
+        ( , , , , , , st, ) = s.locks(id);
     }
 
     // ------------------------------------------------------------ fuzz

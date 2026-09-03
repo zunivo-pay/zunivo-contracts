@@ -76,25 +76,41 @@ contract ZunivoAgentRecordsTest is Test {
         records.setText("ghost", "url", "https://x.example");
     }
 
-    function test_transfer_newHolderWrites_oldHolderLockedOut() public {
+    /// M-2: records AUTO-INVALIDATE on transfer — a bought name never keeps
+    ///      advertising the previous holder's endpoint.
+    function test_M2_recordsInvalidateOnTransfer() public {
         vm.prank(alice);
         records.setText("data", "url", "https://alice.example");
+        assertEq(records.text("data", "url"), "https://alice.example");
 
         vm.prank(alice);
         names.transferFrom(alice, bob, idOf("data"));
 
-        // record survives transfer until overwritten
-        assertEq(records.text("data", "url"), "https://alice.example");
+        // stale record is GONE the instant the name changes hands
+        assertEq(records.text("data", "url"), "");
 
-        // old holder locked out
+        // old holder locked out from writing
         vm.prank(alice);
         vm.expectRevert(ZunivoAgentRecords.NotNameHolder.selector);
         records.setText("data", "url", "https://alice2.example");
 
-        // new holder can overwrite
+        // new holder publishes fresh records
         vm.prank(bob);
         records.setText("data", "url", "https://bob.example");
         assertEq(records.text("data", "url"), "https://bob.example");
+    }
+
+    /// A record set, transferred away, then transferred BACK does not resurrect
+    /// (each ownership epoch is a fresh namespace).
+    function test_M2_recordsDoNotResurrectOnReturn() public {
+        vm.prank(alice);
+        records.setText("data", "url", "https://alice.example");
+        vm.prank(alice);
+        names.transferFrom(alice, bob, idOf("data"));
+        vm.prank(bob);
+        names.transferFrom(bob, alice, idOf("data"));
+        // back with alice, but a new epoch → old value stays cleared
+        assertEq(records.text("data", "url"), "");
     }
 
     // ------------------------------------------------------------ clear

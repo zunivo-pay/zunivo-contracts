@@ -30,6 +30,8 @@ contract ZunivoScheduledSends {
     }
 
     address public owner;
+    /// @notice Two-step ownership handoff (L-3).
+    address public pendingOwner;
     /// @notice Fixed at deployment — not even the owner can redirect fees.
     address public immutable treasury;
     uint16 public feeBps; // applies to locks created AFTER a change, never before
@@ -42,6 +44,15 @@ contract ZunivoScheduledSends {
     uint256 public nextId;
     mapping(uint256 => Lock) public locks;
 
+    /// @notice Pull-payment ledger (H-1 / L-1). When a `release()` push to the
+    ///         recipient or the fee push to the treasury fails, the amount is
+    ///         credited here instead of reverting the whole release. A recipient
+    ///         that is a smart-contract wallet (e.g. a passkey/AA account) — or a
+    ///         treasury that temporarily can't receive — pulls its funds later.
+    ///         This removes the permanent-freeze failure mode without giving the
+    ///         owner or sender any new power over a released lock's principal.
+    mapping(address => uint256) public withdrawable;
+
     event SendScheduled(
         uint256 indexed id,
         bytes32 indexed orderId,
@@ -53,15 +64,20 @@ contract ZunivoScheduledSends {
     );
     event Released(uint256 indexed id, bytes32 indexed orderId, address indexed recipient, uint256 netAmount, uint256 feeAmount);
     event Reclaimed(uint256 indexed id, address indexed sender, uint256 amount);
+    event Credited(address indexed account, uint256 amount);
+    event Withdrawn(address indexed account, uint256 amount);
     event FeeBpsUpdated(uint16 oldFeeBps, uint16 newFeeBps);
+    event OwnershipTransferStarted(address indexed previousOwner, address indexed newOwner);
     event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
 
     error NotOwner();
+    error NotPendingOwner();
     error ZeroAddress();
     error ZeroAmount();
     error UnlockNotInFuture();
     error LockTooLong();
     error GraceTooShort();
+    error GraceTooLong();
     error BatchInvalid();
     error ValueMismatch();
     error LockNotFound();
@@ -72,6 +88,7 @@ contract ZunivoScheduledSends {
     error OnlySender();
     error FeeTooHigh();
     error TransferFailed();
+    error NothingOwed();
 
     modifier onlyOwner() {
         if (msg.sender != owner) revert NotOwner();
@@ -134,6 +151,9 @@ contract ZunivoScheduledSends {
         if (unlockAt <= block.timestamp) revert UnlockNotInFuture();
         if (unlockAt > block.timestamp + MAX_LOCK_DURATION) revert LockTooLong();
         if (reclaimGrace != 0 && reclaimGrace < MIN_RECLAIM_GRACE) revert GraceTooShort();
+        // I-1: bound the grace so `reclaimAt` stays in a sane range and can never
+        // become "reclaimable in name only" (a value so large it never opens).
+        if (reclaimGrace > MAX_LOCK_DURATION) revert GraceTooLong();
 
         uint64 reclaimAt = reclaimGrace == 0 ? 0 : unlockAt + reclaimGrace;
 
@@ -158,6 +178,10 @@ contract ZunivoScheduledSends {
 
     /// @notice Permissionless after unlock — but funds can only go to the
     ///         recipient fixed at creation, at the fee snapshotted at creation.
+    /// @dev    H-1 fix: a recipient (or treasury) that cannot accept a native
+    ///         push no longer reverts the release. The lock still settles
+    ///         (status → Released) and the funds are credited to the recipient's
+    ///         pull balance, so committed/wage locks can never be frozen forever.
     function release(uint256 id) external {
         Lock storage l = locks[id];
         if (l.sender == address(0)) revert LockNotFound();
@@ -171,11 +195,22 @@ contract ZunivoScheduledSends {
         emit Released(id, l.orderId, l.recipient, net, fee);
 
         (bool ok, ) = l.recipient.call{value: net}("");
-        if (!ok) revert TransferFailed();
+        if (!ok) { withdrawable[l.recipient] += net; emit Credited(l.recipient, net); }
         if (fee > 0) {
             (bool okFee, ) = treasury.call{value: fee}("");
-            if (!okFee) revert TransferFailed();
+            if (!okFee) { withdrawable[treasury] += fee; emit Credited(treasury, fee); }
         }
+    }
+
+    /// @notice Pull funds credited by a failed release push. Permissionless:
+    ///         funds only ever go to the account they were credited to.
+    function withdraw() external {
+        uint256 amt = withdrawable[msg.sender];
+        if (amt == 0) revert NothingOwed();
+        withdrawable[msg.sender] = 0; // effects before interaction
+        emit Withdrawn(msg.sender, amt);
+        (bool ok, ) = msg.sender.call{value: amt}("");
+        if (!ok) revert TransferFailed();
     }
 
     /// @notice Only for locks created WITH a reclaim window, only by the
@@ -208,8 +243,15 @@ contract ZunivoScheduledSends {
 
     function transferOwnership(address newOwner) external onlyOwner {
         if (newOwner == address(0)) revert ZeroAddress();
-        emit OwnershipTransferred(owner, newOwner);
-        owner = newOwner;
+        pendingOwner = newOwner;
+        emit OwnershipTransferStarted(owner, newOwner);
+    }
+
+    function acceptOwnership() external {
+        if (msg.sender != pendingOwner) revert NotPendingOwner();
+        emit OwnershipTransferred(owner, pendingOwner);
+        owner = pendingOwner;
+        pendingOwner = address(0);
     }
 
     /// @dev Funds enter only through createSend/createBatch, each bound to a lock.
