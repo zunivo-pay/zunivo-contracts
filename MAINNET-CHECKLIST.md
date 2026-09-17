@@ -25,8 +25,8 @@ Legend: ✅ done · 🔲 todo · ⏳ blocked on external input
 - ✅ **Post-deploy wiring check (cast)** — 9/9: all owners/treasury/feeCollector = deployer, mintPrice 1e18, feeBps 50 ×3, `records.names()` = Names.
 - ✅ **Verify contracts** — 5/5 "Pass - Verified" on arc.etherscan.io via Etherscan V2 API. Gotchas recorded: `explorer.arc.io/api` is behind a Cloudflare challenge (CLI blocked); Etherscan verifier needs `--verifier-url "https://api.etherscan.io/v2/api?chainid=5042" --etherscan-api-key`, one contract at a time, and Etherscan rate-limits at 3 req/s (a failed *status check* ≠ failed verification — re-check the GUID).
 - ✅ **Mainnet smoke (real USDC)** — `NET=mainnet node smoke.mjs smoke` → **8/8**: mint+resolve, records, M-2 invalidation, Router pay (merchant gets amount−fee, fee pushed to collector), Split 70/30 with fee to treasury + `withdraw` pull-path, Scheduled create+release. Total burn ≈ 0.06 USDC across two runs.
-- 🔲 **Two-environment split** — testnet stays as the free sandbox; mainnet is separate config across app / server / SDK. No cross-contamination.
-- 🔲 **Point app / server / SDK at mainnet addresses** — `.env.production`, server contract config, SDK `ARC_MAINNET`. Addresses in `deployments/arc-mainnet-v1.3.json`. **Do this only after the dedicated RPC is in place** (Tier 2) — the public gateway will rate-limit real users.
+- ✅ **Two-environment split (code)** — one switch per repo: SDK `network:"arc"|"arc-testnet"` (1.0.0 defaults to mainnet), server `NETWORK=mainnet|testnet` (own DB per network, `/api/network`), app `VITE_NETWORK` (header badge, sibling link), MCP `ZUNIVO_NETWORK`. Testnet keeps the original sandbox contracts + `zunivo.db`.
+- 🔲 **Cut-over (ops)** — follow `zunivo-server/DEPLOY.md`: publish SDK 1.0.0 → VPS two pm2 instances (`zunivo-mainnet` :8787 / `zunivo-testnet` :8788) → DNS `testnet-api.` + `testnet.` → Vercel: existing project → mainnet env (DELETE the old `VITE_*_ADDRESS` overrides), new project → testnet → verify `/api/health` on both → one real x402 call + one mint through the product → Marketplace network note. Decision taken: main domains go to mainnet now; dedicated RPC still strongly recommended (`RPC_URL` / `VITE_RPC_URL`).
 
 ## TIER 2 — Infrastructure hardening
 
@@ -88,9 +88,9 @@ Both testnet sets stay as sandbox.
 
 ## Recommended order of work now (contracts are live)
 
-1. **Safe multisig on Arc mainnet + transferOwnership/acceptOwnership ×5** (Tier 0) ← do next; single EOA owns everything
-2. **Dedicated RPC** (Tier 2, load-test-proven) — required before any user traffic hits mainnet
-3. **Cut over app / server / SDK to mainnet** (Tier 1) — two-env split, `ARC_MAINNET` filled, Marketplace listing → mainnet endpoint
+1. **Run the cut-over ops** (`zunivo-server/DEPLOY.md`) — code is done and committed in all four repos
+2. **Safe multisig on Arc mainnet + transferOwnership/acceptOwnership ×5** (Tier 0) — single EOA owns everything
+3. **Dedicated RPC** (Tier 2, load-test-proven) — set `RPC_URL` (server) + `VITE_RPC_URL` (app) as soon as you have one
 4. **First real mainnet agent payment → screenshot** (Tier 5 marketing proof; the smoke already did it, but do one through the product)
 5. **Send v1.3 to third-party audit** (Tier 0)
 6. **Delaware C-Corp** (Tier 4)
