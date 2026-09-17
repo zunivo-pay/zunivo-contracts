@@ -1,0 +1,28 @@
+{
+  "network": "arc-mainnet",
+  "chainId": 5042,
+  "rpc": "https://rpc.mainnet.arc.io",
+  "explorer": "https://arc.etherscan.io",
+  "explorerAlt": "https://explorer.arc.io",
+  "usdcNative": "0x3600000000000000000000000000000000000000",
+  "version": "v1.3",
+  "deployedAt": "2026-09-17 (UTC), block 21240365",
+  "deployBlock": 21240365,
+  "deployer": "0xD9caCa6583b5F60CA60ABF4f0f0204f0CeC94311",
+  "owner": "0xD9caCa6583b5F60CA60ABF4f0f0204f0CeC94311",
+  "treasury": "0xD9caCa6583b5F60CA60ABF4f0f0204f0CeC94311",
+  "params": { "mintPriceWei": "1000000000000000000", "mintPriceUSDC": "1", "feeBps": 50 },
+  "contracts": {
+    "ArcPayRouter":         { "address": "0xAa8c293495446d04a51A32e2e4557EDE3BfC7119", "tx": "0x2e2adde319cadbb96086790b095975efc74f61a643ca7f72f61246d6e4b80ee8", "verified": true, "note": "feeBps set to 50 post-deploy via setFeeBps, tx 0xc26125f8c75d650ed4b9617305aeabc1d0755fdcaf07a49ae5ce8c7fc5182974" },
+    "ZunivoNames":          { "address": "0x824218447E8Dbf10E535dC7fB6ab7b68105c7dDa", "tx": "0x140e58f0b20ed7c75463958728cdae9ecb33f56cb8695b98af9e22dc18145fda", "verified": true },
+    "ZunivoScheduledSends": { "address": "0x8d2193555Ad7C3f2EEfe66Ede0F8A3477774050c", "tx": "0x932e2a4b6c6fb817ffb882e5edaf93589003cccc5c990dfbff035c6e666fe656", "verified": true },
+    "ZunivoSplit":          { "address": "0x3c07F894A14AA080191b2Cc95dd4d0BfA31E5715", "tx": "0xea042e6a5c62cd8cafdd2d83cdc7c511d916471f5d9ea0df8b9e8aa40582fdf8", "verified": true },
+    "ZunivoAgentRecords":   { "address": "0xFE9fca63CaA64FBf0B2F089786A706f0C99dCbB1", "tx": "0x70678d119273c0e5762002e2cb6aedd9c43dda3c8a9c82eadc6e954e5344ab5c", "verified": true }
+  },
+  "verification": { "verifier": "etherscan-v2", "url": "https://api.etherscan.io/v2/api?chainid=5042", "compiler": "v0.8.24+commit.e11b9ed9", "optimizer": { "enabled": true, "runs": 10000 }, "evmVersion": "cancun" },
+  "postDeployChecks": {
+    "wiring": "owner/treasury/feeCollector all == deployer; records.names() == ZunivoNames; mintPrice 1e18; feeBps 50 on all three fee contracts",
+    "smoke": "smoke.mjs NET=mainnet 8/8 (mint+resolve, records, M-2 invalidation, router pay+fee push, split accrual+withdraw, scheduled release)"
+  },
+  "pending": ["transferOwnership -> Safe 2/3 multisig (acceptOwnership on each contract)", "app/server/SDK cut-over", "third-party audit"]
+}

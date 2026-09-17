@@ -5,3 +5,4 @@ broadcast/
 .env
 node_modules/
 .fuse_hidden*
+verify/

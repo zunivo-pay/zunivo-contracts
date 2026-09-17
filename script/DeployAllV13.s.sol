@@ -43,7 +43,7 @@ contract DeployAllV13 is Script {
         require(address(records.names()) == address(names), "records/names mismatch");
 
         console2.log("=====================================================");
-        console2.log("Zunivo v1.3 deployed (Arc, chainId 5042002)");
+        console2.log("Zunivo v1.3 deployed (Arc) on chainId", block.chainid);
         console2.log("  treasury      :", treasury);
         console2.log("  mintPrice(wei):", mintPrice);
         console2.log("  feeBps        :", feeBps);

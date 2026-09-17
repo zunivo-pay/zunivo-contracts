@@ -1,7 +1,9 @@
 # Zunivo — Mainnet Readiness Checklist
 
 Target: **Arc mainnet launch, Sept 16, 2026**
-Last updated: after v1.3 audit + testnet dress rehearsal.
+Last updated: **Sept 17, 2026 — v1.3 DEPLOYED + VERIFIED + SMOKE 8/8 ON ARC MAINNET.** Cut-over of app/server/SDK still pending.
+
+> **Status: contracts are live on mainnet (block 21240365). Nothing user-facing points at them yet.** See `deployments/arc-mainnet-v1.3.json` for the canonical record.
 
 Legend: ✅ done · 🔲 todo · ⏳ blocked on external input
 
@@ -13,16 +15,18 @@ Legend: ✅ done · 🔲 todo · ⏳ blocked on external input
 - ✅ **v1.3 hardening** — pull-payment (H-1/M-1/L-1), nameEpoch record-invalidation (M-2), mintReserved (L-2), Ownable2Step (L-3). 91/91 tests pass.
 - ✅ **Testnet dress rehearsal** — v1.3 deployed to Arc testnet via DeployAllV13; wiring + M-2 fix verified on-chain.
 - ✅ **Pre-mainnet smoke test** — smoke.mjs 6/6 on real testnet: mint+resolve, agent records, M-2 invalidation, router pay, split 70/30 accrual, scheduled create+release. Every critical path exercised on-chain.
-- 🔲 **Safe 2/3 multisig** — replace the single deployer key (`0x6963…90c8`) as owner of all owned contracts. Signers: main wallet + hardware wallet + offsite backup. Deploy Safe, then post-mainnet transferOwnership → Safe acceptOwnership on each contract. *No mainnet dependency — can set up now.*
+- 🔲 **Safe 2/3 multisig — NOW THE #1 OPEN RISK.** Mainnet owner + treasury + feeCollector of all 5 contracts is a single EOA (`0xD9ca…4311`, fresh key generated for mainnet). Deploy a Safe on Arc mainnet, then on each contract: `transferOwnership(safe)` → Safe calls `acceptOwnership()` (Ownable2Step). Treasury/feeCollector on Router/Split/Scheduled are immutable or setter-controlled — check each; where immutable, the EOA stays the payout address (acceptable short-term, funds are pulled not held). Signers: main wallet + hardware wallet + offsite backup.
 - 🔲 **Independent third-party audit** — send v1.3 to Sherlock / Code4rena / a boutique firm (this is grant milestone M1). *No deploy dependency — send now, report lands before launch.*
 
 ## TIER 1 — Deploy correctness (the launch itself)
 
-- ⏳ **Mainnet parameters** — Arc mainnet chainId, RPC, USDC ERC-20 address + decimals. SDK `ARC_MAINNET` is a placeholder that REFUSES to run until filled. *Blocked on Circle publishing mainnet params.*
-- 🔲 **Deploy v1.3 to mainnet** — same `DeployAllV13.s.sol`, TREASURY = Safe address, mainnet RPC. (Rehearsed ✓.)
-- 🔲 **Verify contracts on mainnet ArcScan** — `forge verify-contract --verifier blockscout`.
+- ✅ **Mainnet parameters (confirmed on-chain)** — chainId **5042**, RPC `https://rpc.mainnet.arc.io`, native USDC `0x3600000000000000000000000000000000000000` (ERC-20 iface 6 dec; gas/`msg.value` 18 dec), explorer **`https://arc.etherscan.io`** (Etherscan-built ArcScan — the primary one) + `https://explorer.arc.io` (Circle Blockscout). CCTP domain 26. SDK `ARC_MAINNET` placeholder still needs these filled.
+- ✅ **Deploy v1.3 to mainnet** — `DeployAllV13.s.sol`, block 21240365, total gas 0.164 USDC. Deployer/owner/treasury = `0xD9ca…4311` (EOA, Safe pending). Params: mintPrice 1 USDC, feeBps 50 (Router fee set post-deploy via `setFeeBps(50)` — the script only passes FEE_BPS to Scheduled/Split by design).
+- ✅ **Post-deploy wiring check (cast)** — 9/9: all owners/treasury/feeCollector = deployer, mintPrice 1e18, feeBps 50 ×3, `records.names()` = Names.
+- ✅ **Verify contracts** — 5/5 "Pass - Verified" on arc.etherscan.io via Etherscan V2 API. Gotchas recorded: `explorer.arc.io/api` is behind a Cloudflare challenge (CLI blocked); Etherscan verifier needs `--verifier-url "https://api.etherscan.io/v2/api?chainid=5042" --etherscan-api-key`, one contract at a time, and Etherscan rate-limits at 3 req/s (a failed *status check* ≠ failed verification — re-check the GUID).
+- ✅ **Mainnet smoke (real USDC)** — `NET=mainnet node smoke.mjs smoke` → **8/8**: mint+resolve, records, M-2 invalidation, Router pay (merchant gets amount−fee, fee pushed to collector), Split 70/30 with fee to treasury + `withdraw` pull-path, Scheduled create+release. Total burn ≈ 0.06 USDC across two runs.
 - 🔲 **Two-environment split** — testnet stays as the free sandbox; mainnet is separate config across app / server / SDK. No cross-contamination.
-- 🔲 **Point app / server / SDK at mainnet addresses** — update `.env.production`, server contract config, SDK. Cut over only after contracts verified.
+- 🔲 **Point app / server / SDK at mainnet addresses** — `.env.production`, server contract config, SDK `ARC_MAINNET`. Addresses in `deployments/arc-mainnet-v1.3.json`. **Do this only after the dedicated RPC is in place** (Tier 2) — the public gateway will rate-limit real users.
 
 ## TIER 2 — Infrastructure hardening
 
@@ -70,17 +74,26 @@ Legend: ✅ done · 🔲 todo · ⏳ blocked on external input
 - Split `0xD7e9668b6F2C65a5B447788E09A29dc9c1b8551B`
 - AgentRecords `0x1453f3B30E2648bE9DAFFE72d7bc2424FDadA45F`
 
-At mainnet: a THIRD set (v1.3 on mainnet) becomes the real one; both testnet sets stay as sandbox.
+**MAINNET v1.3 (chainId 5042) — LIVE, verified, smoke 8/8, NOT YET WIRED to app/server/SDK:**
+- Router `0xAa8c293495446d04a51A32e2e4557EDE3BfC7119`
+- Names `0x824218447E8Dbf10E535dC7fB6ab7b68105c7dDa`
+- ScheduledSends `0x8d2193555Ad7C3f2EEfe66Ede0F8A3477774050c`
+- Split `0x3c07F894A14AA080191b2Cc95dd4d0BfA31E5715`
+- AgentRecords `0xFE9fca63CaA64FBf0B2F089786A706f0C99dCbB1`
+- Owner/treasury/feeCollector: `0xD9caCa6583b5F60CA60ABF4f0f0204f0CeC94311` (EOA → Safe pending)
+
+Both testnet sets stay as sandbox.
 
 ---
 
-## Recommended order of work before Sept 16
+## Recommended order of work now (contracts are live)
 
-1. **Safe multisig** (Tier 0, no dependency) ← do next
-2. **Send v1.3 to third-party audit** (Tier 0, no dependency)
-3. **Delaware C-Corp** (Tier 4, unblocks Alliance + 83b)
-4. **Mint pricing + testnet-holder claim decision** (Tier 3)
-5. **VPS backups/alerts** (Tier 2)
-6. **CCTP on-ramp guide** (Tier 3)
-7. When Circle publishes mainnet params → **fill ARC_MAINNET, deploy, verify, cut over** (Tier 1)
-8. **Launch-day playbook rehearsal** (Tier 5)
+1. **Safe multisig on Arc mainnet + transferOwnership/acceptOwnership ×5** (Tier 0) ← do next; single EOA owns everything
+2. **Dedicated RPC** (Tier 2, load-test-proven) — required before any user traffic hits mainnet
+3. **Cut over app / server / SDK to mainnet** (Tier 1) — two-env split, `ARC_MAINNET` filled, Marketplace listing → mainnet endpoint
+4. **First real mainnet agent payment → screenshot** (Tier 5 marketing proof; the smoke already did it, but do one through the product)
+5. **Send v1.3 to third-party audit** (Tier 0)
+6. **Delaware C-Corp** (Tier 4)
+7. **CCTP on-ramp guide** (Tier 3) — without it nobody can pay
+8. **VPS backups/alerts** (Tier 2)
+9. **Testnet-holder claim** (Tier 3) — decide + announce honestly (what, when, how)
